@@ -1,0 +1,11 @@
+name = "kimothy"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[assets]
+directory = "."
+
+[[d1_databases]]
+binding = "DB"
+database_name = "kimothy-waitlist"
+database_id = "17f5573c-5625-469b-a62d-08a3e10a2028"

@@ -119,11 +119,19 @@
     document.addEventListener('click', () => { document.getElementById('audio').play(); }, { once: true });
     document.getElementById('audio').play().catch(() => {});
 
-    function handleSubmit(e) {
+    async function handleSubmit(e) {
       e.preventDefault();
       const email = document.getElementById('email-input').value;
-      // TODO: send email to backend
-      document.getElementById('email-form').innerHTML = '<p style="font-family:Arial,sans-serif;font-style:italic;font-size:1.4rem;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,0.5)">you\'ll hear from us</p>';
+      const confirm = '<p style="font-family:Arial,sans-serif;font-style:italic;font-size:1.4rem;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,0.5)">you\'ll hear from us</p>';
+      try {
+        await fetch('/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+      } finally {
+        document.getElementById('email-form').innerHTML = confirm;
+      }
     }
   </script>
 </body>
