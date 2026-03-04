@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kimothy</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #000;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
+    }
+    canvas { display: block; }
+    #hint {
+      position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%);
+      color: rgba(255,255,255,0.15);
+      font-family: Arial, sans-serif; font-size: 0.75rem; letter-spacing: 0.12em;
+      text-align: center; line-height: 1.8;
+      pointer-events: none;
+    }
+    #file-input { display: none; }
+    #load-btn {
+      position: fixed; top: 2rem; right: 2rem;
+      background: none; border: 1px solid rgba(255,255,255,0.15);
+      color: rgba(255,255,255,0.3); font-family: Arial, sans-serif;
+      font-size: 0.7rem; letter-spacing: 0.1em; padding: 0.4em 0.8em;
+      border-radius: 4px; cursor: pointer;
+    }
+    #load-btn:hover { border-color: rgba(255,255,255,0.4); color: rgba(255,255,255,0.6); }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <button id="load-btn">load audio</button>
+  <input type="file" id="file-input" accept="audio/*">
+  <div id="hint">space — cycle states &nbsp;·&nbsp; load audio — set response track</div>
+
+  <script>
+    const STATES = ['idle', 'listening', 'thinking', 'responding'];
+    let stateIndex = 0;
+    let state = 'idle';
+
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+
+    let audioCtx, micAnalyser, playAnalyser, micSource, audioSource;
+    let audioBuffer = null;
+    let micStream = null;
+
+    function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Load audio file
+    document.getElementById('load-btn').addEventListener('click', () => {
+      document.getElementById('file-input').click();
+    });
+    document.getElementById('file-input').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (!audioCtx) audioCtx = new AudioContext();
+      const buf = await file.arrayBuffer();
+      audioBuffer = await audioCtx.decodeAudioData(buf);
+    });
+
+    async function startListening() {
+      if (!audioCtx) audioCtx = new AudioContext();
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micSource = audioCtx.createMediaStreamSource(micStream);
+      micAnalyser = audioCtx.createAnalyser();
+      micAnalyser.fftSize = 512;
+      micSource.connect(micAnalyser);
+    }
+
+    function stopListening() {
+      if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+      micAnalyser = null;
+    }
+
+    function startResponding() {
+      if (!audioBuffer || !audioCtx) return;
+      if (audioSource) { try { audioSource.stop(); } catch(e) {} }
+      audioSource = audioCtx.createBufferSource();
+      audioSource.buffer = audioBuffer;
+      playAnalyser = audioCtx.createAnalyser();
+      playAnalyser.fftSize = 512;
+      audioSource.connect(playAnalyser);
+      playAnalyser.connect(audioCtx.destination);
+      audioSource.start();
+    }
+
+    let thinkTimer = null;
+
+    async function nextState() {
+      if (thinkTimer) { clearTimeout(thinkTimer); thinkTimer = null; }
+      stateIndex = (stateIndex + 1) % STATES.length;
+      state = STATES[stateIndex];
+
+      if (state === 'listening') {
+        await startListening().catch(() => {});
+      } else if (state === 'thinking') {
+        stopListening();
+        thinkTimer = setTimeout(nextState, 2200);
+      } else if (state === 'responding') {
+        startResponding();
+      } else {
+        // idle
+        if (audioSource) { try { audioSource.stop(); } catch(e) {} }
+      }
+    }
+
+    document.addEventListener('keydown', e => {
+      if (e.code === 'Space') { e.preventDefault(); nextState(); }
+    });
+    canvas.addEventListener('click', nextState);
+
+    // Colors per state
+    const COLORS = {
+      idle:       [255, 255, 255],
+      listening:  [160, 200, 255],
+      thinking:   [180, 180, 180],
+      responding: [255, 220, 140],
+    };
+
+    let phase = 0;
+    const NUM_POINTS = 256;
+
+    function getFreqData(analyser) {
+      if (!analyser) return null;
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(data);
+      return data;
+    }
+
+    function lerp(a, b, t) { return a + (b - a) * t; }
+
+    let targetAmp = 0, currentAmp = 0;
+
+    function draw() {
+      requestAnimationFrame(draw);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+      const base = Math.min(canvas.width, canvas.height) * 0.18;
+
+      phase += 0.018;
+
+      const [r, g, b] = COLORS[state];
+      const colorStr = `${r},${g},${b}`;
+
+      let freqData = null;
+
+      if (state === 'listening') {
+        freqData = getFreqData(micAnalyser);
+      } else if (state === 'responding') {
+        freqData = getFreqData(playAnalyser);
+      }
+
+      // Compute target amplitude
+      if (freqData) {
+        let sum = 0;
+        for (let i = 0; i < freqData.length; i++) sum += freqData[i];
+        targetAmp = (sum / freqData.length / 255) * 1.4;
+      } else if (state === 'thinking') {
+        targetAmp = 0.04 + 0.02 * Math.sin(phase * 4);
+      } else {
+        targetAmp = 0.06 + 0.03 * Math.sin(phase);
+      }
+
+      currentAmp = lerp(currentAmp, targetAmp, 0.12);
+
+      // Draw orb
+      ctx.beginPath();
+      for (let i = 0; i <= NUM_POINTS; i++) {
+        const angle = (i / NUM_POINTS) * Math.PI * 2;
+        let radius = base;
+
+        if (freqData) {
+          const idx = Math.floor((i / NUM_POINTS) * freqData.length * 0.5);
+          radius += (freqData[idx] / 255) * base * 1.8;
+        }
+
+        // Organic noise layers
+        radius += Math.sin(angle * 5 + phase * 1.5) * base * currentAmp;
+        radius += Math.sin(angle * 3 - phase * 0.7) * base * currentAmp * 0.6;
+        radius += Math.sin(angle * 9 + phase * 2.3) * base * currentAmp * 0.3;
+
+        const x = cx + Math.cos(angle) * radius;
+        const y = cy + Math.sin(angle) * radius;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+
+      // Glow layers
+      ctx.shadowBlur = 60;
+      ctx.shadowColor = `rgba(${colorStr},0.6)`;
+      ctx.strokeStyle = `rgba(${colorStr},0.85)`;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.shadowBlur = 120;
+      ctx.shadowColor = `rgba(${colorStr},0.3)`;
+      ctx.stroke();
+
+      // Fill
+      ctx.shadowBlur = 0;
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, base * 2.5);
+      grad.addColorStop(0, `rgba(${colorStr},0.12)`);
+      grad.addColorStop(1, `rgba(${colorStr},0)`);
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+
+    draw();
+  </script>
+</body>
+</html>
